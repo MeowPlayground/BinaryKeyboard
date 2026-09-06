@@ -43,10 +43,10 @@ async function toggleRgb(event: Event) {
 <template>
   <StudioSidebarEntry
     class="rgb-entry"
-    title="RGB 灯效"
+    title="灯光与电源"
     :meta="`${rgbEnabled ? modeLabel : '关闭'} · 亮度 ${brightnessLabel}`"
     icon="pi pi-palette"
-    aria-label="打开 RGB 灯效"
+    aria-label="打开灯光与电源设置"
     @open="emit('open')"
   >
     <template #action>

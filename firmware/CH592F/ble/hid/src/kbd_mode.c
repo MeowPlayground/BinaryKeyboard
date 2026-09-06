@@ -20,6 +20,7 @@
 #include "debug.h"
 #include "ws2812.h"
 #include "ble_rtc.h"
+#include "ble_sleep.h"
 #include <string.h>
 
 #define TAG "MODE"
@@ -48,6 +49,10 @@ static kbd_pm_state_t g_pm_state = KBD_PM_ACTIVE;
 static bool g_mode_switching = false;
 static uint32_t g_last_activity_tick = 0;
 static bool g_wake_requested = false;
+static uint8_t g_sleep_wake_suppress_fn = 0xFF;
+#if KBD_SLEEP_TEST_MODE
+static uint32_t g_sleep_test_last_bucket = 0;
+#endif
 
 /** 报告缓冲区 */
 static uint8_t g_kbd_report[KBD_HID_KEYBOARD_REPORT_LEN];
@@ -71,6 +76,9 @@ static void KBD_Mode_ArmDeepSleepCheck(void);
 static bool KBD_Mode_IsDeepSleepCheckDue(void);
 static bool KBD_Mode_USB_HasProtocolHandshake(void);
 static void KBD_Mode_PlaySleepEntryAnimation(void);
+#if KBD_SLEEP_TEST_MODE
+static void KBD_Mode_RunSleepTestIndicator(void);
+#endif
 static kbd_state_t KBD_Mode_ResolveIndicatorState(void);
 static void KBD_Mode_RefreshIndicatorState(void);
 static void KBD_Mode_EnterLightSleep(void);
@@ -162,11 +170,14 @@ void KBD_Mode_Process(void)
     {
         uint32_t deep_timeout_ms = KBD_Mode_GetDeepSleepTimeoutMs();
 
-        /*
-         * LIGHT 期间由我们主动执行 CPU idle。
-         * 这里不能依赖 BLE idleCB 自动 Sleep，否则会在 RGB 活跃期打断 TMR1/DMA，
-         * 导致 WS2812 上电阶段闪烁。
-         */
+        if (g_sleep_wake_suppress_fn != 0xFF &&
+            FnKey_IsDown(g_sleep_wake_suppress_fn) == 0)
+        {
+            g_sleep_wake_suppress_fn = 0xFF;
+        }
+
+        /* BLE LIGHT is slept by the stack scheduler so connection events are
+         * not missed. Other transports use CPU idle directly. */
         if (g_wake_requested || !KBD_Mode_CanEnterLowPower())
         {
             KBD_Mode_ExitLightSleep();
@@ -181,18 +192,37 @@ void KBD_Mode_Process(void)
             /* 不返回（Shutdown 后唤醒等价复位） */
         }
 
-        if ((deep_timeout_ms > 0u) &&
-            KBD_Mode_IsDeepSleepCheckDue() &&
-            KBD_Mode_CanEnterDeepSleep())
+        if ((g_current_mode != KBD_WORK_MODE_BLE) &&
+            (deep_timeout_ms > 0u) && KBD_Mode_IsDeepSleepCheckDue())
         {
-            KBD_Mode_EnterDeepSleep();
+            if (KBD_Mode_GetIdleMs() < deep_timeout_ms)
+            {
+                KBD_Mode_ArmDeepSleepCheck();
+            }
+            else if (KBD_Mode_CanEnterDeepSleep())
+            {
+                KBD_Mode_EnterDeepSleep();
+            }
+            else
+            {
+                /* 临时被按住的 FN 或其他条件阻塞时继续等待，不丢失检查。 */
+                KBD_Mode_ArmDeepSleepCheck();
+            }
         }
 
-        LowPower_Idle();
+        /* In BLE mode TMOS invokes CH59x_LowPower at the next safe radio
+         * deadline. Direct WFI here can miss connection events and time out. */
+        if (g_current_mode != KBD_WORK_MODE_BLE)
+        {
+            LowPower_Idle();
+        }
         return;
     }
 
     /* ACTIVE */
+#if KBD_SLEEP_TEST_MODE
+    KBD_Mode_RunSleepTestIndicator();
+#endif
     if ((KBD_Mode_GetLightSleepTimeoutMs() > 0u) &&
         KBD_Mode_CanEnterLowPower() &&
         (KBD_Mode_GetIdleMs() >= KBD_Mode_GetLightSleepTimeoutMs()))
@@ -215,7 +245,20 @@ void KBD_Mode_RecordActivity(void)
 
 void KBD_Mode_RequestWake(void)
 {
+    if (g_sleep_wake_suppress_fn != 0xFF &&
+        FnKey_IsDown(g_sleep_wake_suppress_fn) != 0)
+    {
+        return;
+    }
     g_wake_requested = true;
+}
+
+void KBD_Mode_SuppressWakeForFn(uint8_t fn_id)
+{
+    if (fn_id < KBD_FN_NUM_KEYS)
+    {
+        g_sleep_wake_suppress_fn = fn_id;
+    }
 }
 
 /*============================================================================*/
@@ -279,6 +322,16 @@ bool KBD_Mode_IsConnected(void)
     return (g_conn_state == KBD_CONN_CONNECTED);
 }
 
+bool KBD_Mode_IsInputReady(void)
+{
+    if (g_current_mode == KBD_WORK_MODE_USB)
+    {
+        return (g_USB_DeviceState == USB_STATE_CONFIGURED);
+    }
+
+    return BLE_HID_IsKeyboardReady();
+}
+
 static void KBD_Mode_UpdateConnState(kbd_conn_state_t state)
 {
     if (state == g_conn_state)
@@ -290,7 +343,8 @@ static void KBD_Mode_UpdateConnState(kbd_conn_state_t state)
     g_last_activity_tick = KBD_Mode_GetNow();
     LOG_D(TAG, "conn state=%d", state);
 
-    if (g_pm_state == KBD_PM_LIGHT)
+    if (g_pm_state == KBD_PM_LIGHT &&
+        g_current_mode != KBD_WORK_MODE_BLE)
     {
         KBD_Mode_ArmDeepSleepCheck();
     }
@@ -564,6 +618,12 @@ bool KBD_Mode_IsInSleep(void)
     return (g_pm_state != KBD_PM_ACTIVE);
 }
 
+bool KBD_Mode_IsSeamlessWakeEnabled(void)
+{
+    const kbd_system_config_t *sys = KBD_GetSystemConfig();
+    return (sys->seamless_wake != KBD_SEAMLESS_WAKE_DISABLED);
+}
+
 kbd_pm_state_t KBD_Mode_GetPMState(void)
 {
     return g_pm_state;
@@ -603,6 +663,14 @@ static bool KBD_Mode_CanEnterDeepSleep(void)
         return false;
     }
 
+    for (uint8_t i = 0; i < KBD_FN_NUM_KEYS; i++)
+    {
+        if (FnKey_IsDown(i) != 0)
+        {
+            return false;
+        }
+    }
+
     return true;
 }
 
@@ -624,6 +692,17 @@ static void KBD_Mode_EnterLightSleep(void)
 
     g_pm_state = KBD_PM_LIGHT;
     g_wake_requested = false;
+    if (g_current_mode == KBD_WORK_MODE_BLE)
+    {
+        /* A previous DEEP timer cancellation may have disabled the shared RTC
+         * trigger. Restore the stack-owned wake source before enabling sleep. */
+        HAL_SleepInit();
+        CH59x_LowPowerSetEnabled(1u);
+    }
+    else
+    {
+        CH59x_LowPowerSetEnabled(0u);
+    }
     LOG_I(TAG, "enter LIGHT");
 
     KBD_Mode_ReleaseAllKeys();
@@ -632,7 +711,10 @@ static void KBD_Mode_EnterLightSleep(void)
     KBD_RGB_SetLowPower(true); /* 内部 WS2812_Sleep() 切断 LED 电源 + 数据脚高阻 */
     KBD_Battery_Suspend();     /* 关闭 VBAT 分压 + 停止周期性采样 */
     Key_EnterSleep();          /* 停 TMR0，保留 GPIO 中断作为按键唤醒源 */
-    KBD_Mode_ArmDeepSleepCheck();
+    if (g_current_mode != KBD_WORK_MODE_BLE)
+    {
+        KBD_Mode_ArmDeepSleepCheck();
+    }
 }
 
 static void KBD_Mode_ExitLightSleep(void)
@@ -642,6 +724,7 @@ static void KBD_Mode_ExitLightSleep(void)
 
     g_pm_state = KBD_PM_ACTIVE;
     g_wake_requested = false;
+    CH59x_LowPowerSetEnabled(0u);
     LOG_I(TAG, "exit LIGHT");
 
     KBD_Mode_CancelDeepSleepCheck();
@@ -651,6 +734,7 @@ static void KBD_Mode_ExitLightSleep(void)
     KBD_RGB_SetSchedulerEnabled(true);
 
     g_last_activity_tick = KBD_Mode_GetNow();
+    g_sleep_wake_suppress_fn = 0xFF;
     KBD_Mode_RefreshIndicatorState();
 }
 
@@ -669,6 +753,8 @@ static void KBD_Mode_EnterDeepSleep(void)
     LOG_I(TAG, "enter DEEP (shutdown)");
     g_pm_state = KBD_PM_DEEP;
     g_wake_requested = false;
+    CH59x_LowPowerSetEnabled(0u);
+    g_sleep_wake_suppress_fn = 0xFF;
     KBD_Mode_CancelDeepSleepCheck();
 
     /* BLE 模式下先主动断开并抑制自动恢复广播，再执行深睡。 */
@@ -689,6 +775,7 @@ static void KBD_Mode_EnterDeepSleep(void)
     /* 确保 Flash / 日志等写操作落盘 */
     mDelaymS(5);
 
+    SYS_ResetKeepBuf(KBD_DEEP_WAKE_RESET_MARKER);
     LowPower_Shutdown(0);
     /* Shutdown 唤醒 = 复位，不会返回 */
 }
@@ -763,6 +850,9 @@ static uint32_t KBD_Mode_GetNow(void)
 static void KBD_Mode_RecordActivityInternal(void)
 {
     g_last_activity_tick = KBD_Mode_GetNow();
+#if KBD_SLEEP_TEST_MODE
+    g_sleep_test_last_bucket = 0;
+#endif
 }
 
 static uint32_t KBD_Mode_GetIdleMs(void)
@@ -859,7 +949,10 @@ static bool KBD_Mode_IsDeepSleepCheckDue(void)
 
 static bool KBD_Mode_USB_HasProtocolHandshake(void)
 {
-    return (g_USB_DeviceState >= USB_STATE_CONFIGURED);
+    /* USB_STATE_SUSPENDED is numerically greater than CONFIGURED, but it is
+     * not an active protocol session and may remain after the cable is
+     * removed.  Ordinal comparison therefore creates a false sleep blocker. */
+    return (g_USB_DeviceState == USB_STATE_CONFIGURED);
 }
 
 static void KBD_Mode_PlaySleepEntryAnimation(void)
@@ -883,6 +976,65 @@ static void KBD_Mode_PlaySleepEntryAnimation(void)
         }
     }
 }
+
+#if KBD_SLEEP_TEST_MODE
+/**
+ * 测试固件的无串口休眠进度提示。
+ * 只读空闲计时，不调用 RecordActivity，因此不会改变真实休眠计时。
+ */
+static void KBD_Mode_RunSleepTestIndicator(void)
+{
+    uint32_t idle_ms = KBD_Mode_GetIdleMs();
+    uint32_t light_timeout_ms = KBD_Mode_GetLightSleepTimeoutMs();
+    uint32_t bucket = idle_ms / KBD_SLEEP_TEST_FLASH_INTERVAL_MS;
+
+    if (bucket == 0u)
+    {
+        g_sleep_test_last_bucket = 0u;
+        return;
+    }
+
+    if (bucket != g_sleep_test_last_bucket)
+    {
+        g_sleep_test_last_bucket = bucket;
+
+        if (light_timeout_ms == 0u)
+        {
+            /* LIGHT=0 explicitly disables automatic sleep. */
+            KBD_RGB_Flash(180, 0, 255,
+                          KBD_SLEEP_TEST_FLASH_DURATION_MS);
+            return;
+        }
+
+        /* Once LIGHT is due, report why entry is blocked instead of
+         * continuing to show the normal idle-progress colour. */
+        if (idle_ms >= light_timeout_ms)
+        {
+            if (KBD_Mode_USB_HasProtocolHandshake())
+            {
+                KBD_RGB_Flash(255, 0, 0, KBD_SLEEP_TEST_FLASH_DURATION_MS);
+                return;
+            }
+
+            if (KBD_Battery_GetChargeState() == BAT_CHG_CHARGING)
+            {
+                KBD_RGB_Flash(255, 160, 0,
+                              KBD_SLEEP_TEST_FLASH_DURATION_MS);
+                return;
+            }
+
+            /* No blocker: the caller will immediately enter LIGHT and play
+             * the three-flash entry animation. */
+            return;
+        }
+
+        KBD_RGB_Flash(KBD_IND_SLEEP_READY_R,
+                      KBD_IND_SLEEP_READY_G,
+                      KBD_IND_SLEEP_READY_B,
+                      KBD_SLEEP_TEST_FLASH_DURATION_MS);
+    }
+}
+#endif
 
 static kbd_state_t KBD_Mode_ResolveIndicatorState(void)
 {

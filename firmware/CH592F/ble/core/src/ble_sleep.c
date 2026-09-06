@@ -14,6 +14,14 @@
 /* 头文件包含 */
 #include "ble_hal.h"
 
+/* Active RGB uses TMR1/DMA, so scheduler sleep is enabled only in LIGHT. */
+static volatile uint8_t s_ble_sleep_enabled = 0;
+
+void CH59x_LowPowerSetEnabled(uint8_t enable)
+{
+    s_ble_sleep_enabled = enable ? 1 : 0;
+}
+
 /*******************************************************************************
  * @fn          CH59x_LowPower
  *
@@ -26,6 +34,11 @@
 uint32_t CH59x_LowPower(uint32_t time)
 {
 #if(defined(HAL_SLEEP)) && (HAL_SLEEP == TRUE)
+    if (!s_ble_sleep_enabled)
+    {
+        return 3;
+    }
+
     volatile uint32_t i;
     uint32_t time_sleep, time_curr;
     unsigned long irq_status;

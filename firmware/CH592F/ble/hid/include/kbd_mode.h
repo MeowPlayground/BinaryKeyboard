@@ -86,7 +86,12 @@ extern "C"
     /**
      * @brief 请求退出低功耗，由主循环统一执行恢复。
      */
-    void KBD_Mode_RequestWake(void);
+void KBD_Mode_RequestWake(void);
+
+/**
+ * @brief 标记某个 FN 长按正在执行休眠，松开该次长按不应立即唤醒。
+ */
+void KBD_Mode_SuppressWakeForFn(uint8_t fn_id);
 
     /*============================================================================*/
     /* 模式切换 API */
@@ -126,6 +131,7 @@ extern "C"
      * @return true 已连接，false 未连接
      */
     bool KBD_Mode_IsConnected(void);
+    bool KBD_Mode_IsInputReady(void);
 
     /*============================================================================*/
     /* 蓝牙控制 API */
@@ -254,7 +260,10 @@ extern "C"
      * @brief 检查是否处于低功耗模式
      * @return true 低功耗模式，false 正常模式
      */
-    bool KBD_Mode_IsInSleep(void);
+bool KBD_Mode_IsInSleep(void);
+
+/** 是否将唤醒设备的首个真实按键动作透传给上层。 */
+bool KBD_Mode_IsSeamlessWakeEnabled(void);
 
     /**
      * @brief 当前策略下是否允许进入低功耗。

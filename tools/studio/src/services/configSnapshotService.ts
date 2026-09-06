@@ -100,6 +100,9 @@ function validateConfigBackupShape(backup: ConfigBackupFile): void {
       const value = (rgb as unknown as Record<string, unknown>)[key];
       if (value !== undefined && !isByte(value)) errors.push(`RGB ${key} 无效`);
     });
+    if (rgb.seamlessWakeEnabled !== undefined && typeof rgb.seamlessWakeEnabled !== 'boolean') {
+      errors.push('无感唤醒配置无效');
+    }
   }
 
   const fnConfig = backup.config?.fnKeys;

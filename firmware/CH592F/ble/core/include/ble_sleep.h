@@ -40,6 +40,12 @@ extern void HAL_SleepInit(void);
  */
 extern uint32_t CH59x_LowPower(uint32_t time);
 
+/**
+ * @brief Allow the BLE scheduler to enter sleep between radio events.
+ * @param enable 1 to enable scheduler-managed sleep, 0 to keep the CPU awake.
+ */
+extern void CH59x_LowPowerSetEnabled(uint8_t enable);
+
 /*********************************************************************
 *********************************************************************/
 

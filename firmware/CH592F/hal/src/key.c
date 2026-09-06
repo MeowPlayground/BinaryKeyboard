@@ -207,13 +207,20 @@ static const kbd_key_pin_t g_boot_pin = {KBD_FN_BOOT_PORT, KBD_FN_BOOT_PIN};
  * @note
  * - Push: ISR
  * - Pop : 主循环
- * - 满时丢弃新事件（Push 直接 return）
+ * - 满时丢弃新 PRESS；RELEASE 会淘汰最旧事件后入队
  */
 static volatile key_event_t s_key_queue[KEY_QUEUE_SIZE];
 /** @brief 普通按键队列写指针。 */
 static volatile uint8_t s_key_wr = 0;
 /** @brief 普通按键队列读指针。 */
 static volatile uint8_t s_key_rd = 0;
+/** DEEP 唤醒后等待安全 HID 同步的标志。 */
+static volatile uint8_t s_deep_wake_recovery_pending = 0;
+/** HID ready must remain stable briefly before accepting fresh input. */
+static volatile uint32_t s_deep_wake_ready_tick = 0;
+static volatile uint8_t s_deep_wake_sync_pending = 0;
+
+#define DEEP_WAKE_HID_SETTLE_MS 200u
 
 /**
  * @brief FN 按键事件队列（环形缓冲）。
@@ -257,6 +264,7 @@ typedef struct
     volatile uint16_t lock_ms; /**< 锁定倒计时（ms）。>0 表示锁定中。 */
     volatile uint8_t is_down;  /**< 当前是否按下（1=按下，0=松开）。 */
     volatile uint8_t expect;   /**< 期待的边沿：0=按下(下降沿)，1=松开(上升沿)。 */
+    volatile uint8_t suppress_action; /**< 当前唤醒按键是否仅用于唤醒。 */
 } key_ctx_t;
 
 /** @brief 普通按键上下文数组（每个键一个 ctx）。 */
@@ -265,13 +273,16 @@ static volatile key_ctx_t s_key_ctx[KBD_SCAN_KEY_COUNT];
 /**
  * @brief FN 按键上下文（边沿 + 锁定去抖 + 按下时间戳）。
  * @details
- * FN 键在松开边沿计算 dur = now - press_tick 并决定 CLICK / LONG。
+ * FN 键达到阈值时产生 LONG；在阈值前松开时产生 CLICK。
  */
 typedef struct
 {
     volatile uint16_t lock_ms;    /**< 锁定倒计时（ms）。 */
     volatile uint8_t is_down;     /**< 当前是否按下（1=按下，0=松开）。 */
     volatile uint8_t expect;      /**< 期待边沿：0=按下(下降沿)，1=松开(上升沿)。 */
+    volatile uint8_t long_sent;   /**< LONG 是否已经在阈值到达时发送。 */
+    volatile uint8_t suppress_action; /**< 当前唤醒动作是否仅用于唤醒。 */
+    volatile uint16_t long_press_ms; /**< 当前 FN 键的长按阈值。 */
     volatile uint32_t press_tick; /**< 按下边沿发生时的 tick（ms）。 */
 } fn_ctx_t;
 
@@ -391,13 +402,17 @@ static inline uint8_t ReadPinLevel(const kbd_key_pin_t *pin)
  * @param key     按键索引
  * @param type    事件类型（KEY_EVT_PRESS/KEY_EVT_RELEASE）
  * @param tick_ms 时间戳
- * @note 队列满时丢弃新事件（不覆盖旧事件）。
+ * @note 队列满时优先保留 RELEASE，宁可丢一次 PRESS 也不能让主机卡键。
  */
 static inline void PushKeyEvent(uint8_t key, uint8_t type, uint32_t tick_ms)
 {
     uint8_t next = (uint8_t)((s_key_wr + 1) & (KEY_QUEUE_SIZE - 1));
     if (next == s_key_rd)
-        return;
+    {
+        if (type != KEY_EVT_RELEASE)
+            return;
+        s_key_rd = (uint8_t)((s_key_rd + 1) & (KEY_QUEUE_SIZE - 1));
+    }
     s_key_queue[s_key_wr].key = key;
     s_key_queue[s_key_wr].type = type;
     s_key_queue[s_key_wr].tick_ms = tick_ms;
@@ -491,7 +506,14 @@ static inline void HandleNormalKeyEdge(uint8_t idx)
     if (s_key_ctx[idx].expect == 0)
     {
         s_key_ctx[idx].is_down = 1;
-        PushKeyEvent(logical_key, KEY_EVT_PRESS, now);
+        if (s_deep_wake_recovery_pending)
+        {
+            s_key_ctx[idx].suppress_action = 1;
+        }
+        if (!s_key_ctx[idx].suppress_action)
+        {
+            PushKeyEvent(logical_key, KEY_EVT_PRESS, now);
+        }
 
 #if KEY_ENABLE_RELEASE_EVENT
         s_key_ctx[idx].expect = 1;
@@ -503,7 +525,11 @@ static inline void HandleNormalKeyEdge(uint8_t idx)
     else
     {
         s_key_ctx[idx].is_down = 0;
-        PushKeyEvent(logical_key, KEY_EVT_RELEASE, now);
+        if (!s_key_ctx[idx].suppress_action)
+        {
+            PushKeyEvent(logical_key, KEY_EVT_RELEASE, now);
+        }
+        s_key_ctx[idx].suppress_action = 0;
         s_key_ctx[idx].expect = 0;
         ConfigPinFallEdge(pin);
     }
@@ -513,11 +539,11 @@ static inline void HandleNormalKeyEdge(uint8_t idx)
 }
 
 /**
- * @brief 处理 FN 按键的边沿中断（press 记录 tick，release 判定 click/long + lockout）。
+ * @brief 处理 FN 按键的边沿中断（press 记录 tick，release 产生 click + lockout）。
  * @param id FN 键索引（0..KBD_FN_NUM_KEYS-1）
  * @details
  * - 按下沿：记录 press_tick，并配置上升沿等待 release
- * - 松开沿：dur=now-press_tick，dur>=FN_LONG_PRESS_MS -> LONG，否则 CLICK
+ * - 松开沿：若 LONG 尚未发送则产生 CLICK，否则只恢复等待下一次按下
  * - 每次边沿后都进入 lockout：禁用引脚中断，等待 1ms 定时器解锁
  */
 static inline void HandleFnKeyEdge(uint8_t id)
@@ -532,26 +558,27 @@ static inline void HandleFnKeyEdge(uint8_t id)
     {
         /* Press edge. */
         s_fn_ctx[id].is_down = 1;
+        if (s_deep_wake_recovery_pending)
+        {
+            s_fn_ctx[id].suppress_action = 1;
+        }
+        s_fn_ctx[id].long_sent = 0;
         s_fn_ctx[id].press_tick = now;
         s_fn_ctx[id].expect = 1;
         ConfigPinRiseEdge(pin);
     }
     else
     {
-        /* Release edge -> decide click/long. */
+        /* Release edge -> emit CLICK only if LONG was not already emitted. */
         s_fn_ctx[id].is_down = 0;
         s_fn_ctx[id].expect = 0;
         ConfigPinFallEdge(pin);
 
-        uint32_t dur = now - s_fn_ctx[id].press_tick;
-        if (dur >= (uint32_t)FN_LONG_PRESS_MS)
-        {
-            PushFnEvent(id, FNKEY_EVT_LONG, now);
-        }
-        else
+        if (!s_fn_ctx[id].long_sent && !s_fn_ctx[id].suppress_action)
         {
             PushFnEvent(id, FNKEY_EVT_CLICK, now);
         }
+        s_fn_ctx[id].suppress_action = 0;
     }
 
     s_fn_ctx[id].lock_ms = FN_LOCKOUT_MS;
@@ -582,10 +609,9 @@ static inline void HandlePortIrq(gpio_port_t port)
     if (flags == 0)
         return;
 
-    if (KBD_Mode_IsInSleep())
-    {
-        KBD_Mode_RequestWake();
-    }
+    uint8_t waking = KBD_Mode_IsInSleep() ? 1u : 0u;
+    uint8_t suppress_wake_action =
+        (waking && !KBD_Mode_IsSeamlessWakeEnabled()) ? 1u : 0u;
 
     for (uint8_t i = 0; i < KBD_SCAN_KEY_COUNT && flags; i++)
     {
@@ -594,6 +620,23 @@ static inline void HandlePortIrq(gpio_port_t port)
         uint32_t pin = g_key_pins[i].pin;
         if (flags & pin)
         {
+            uint8_t level = ReadPinLevel(&g_key_pins[i]);
+            uint8_t valid_edge = (s_key_ctx[i].expect == 0) ?
+                                     (level == 0) : (level != 0);
+            if (!valid_edge)
+            {
+                ClearPinItFlag(port, pin);
+                flags &= ~pin;
+                continue;
+            }
+            if (waking)
+            {
+                KBD_Mode_RequestWake();
+            }
+            if (suppress_wake_action && s_key_ctx[i].expect == 0)
+            {
+                s_key_ctx[i].suppress_action = 1;
+            }
             ClearPinItFlag(port, pin);
             flags &= ~pin;
             HandleNormalKeyEdge(i);
@@ -607,13 +650,33 @@ static inline void HandlePortIrq(gpio_port_t port)
         uint32_t pin = g_fn_pins[id].pin;
         if (flags & pin)
         {
+            uint8_t level = ReadPinLevel(&g_fn_pins[id]);
+            uint8_t valid_edge = (s_fn_ctx[id].expect == 0) ?
+                                     (level == 0) : (level != 0);
+            if (!valid_edge)
+            {
+                ClearPinItFlag(port, pin);
+                flags &= ~pin;
+                continue;
+            }
+            if (waking)
+            {
+                KBD_Mode_RequestWake();
+            }
+            if (suppress_wake_action && s_fn_ctx[id].expect == 0)
+            {
+                s_fn_ctx[id].suppress_action = 1;
+            }
             ClearPinItFlag(port, pin);
             flags &= ~pin;
             HandleFnKeyEdge(id);
         }
     }
 
-    Encoder_HandlePortIrq(port);
+    if (Encoder_HandlePortIrq(port) && waking)
+    {
+        KBD_Mode_RequestWake();
+    }
 }
 
 /**
@@ -632,12 +695,12 @@ __INTERRUPT __HIGH_CODE void GPIOB_IRQHandler(void) { HandlePortIrq(GPIO_PORT_B)
  */
 
 /**
- * @brief TMR0 中断服务函数：1ms tick + lockout 倒计时 + 解锁引脚中断。
+ * @brief TMR0 中断服务函数：1ms tick + FN 长按触发 + lockout 倒计时。
  * @details
  * - 每 1ms：
  *   - s_tick_ms++
  *   - 遍历所有普通键 ctx：若 lock_ms>0 则 lock_ms--，到 0 时清 flag 并 EnablePinIrq()
- *   - 遍历所有 FN 键 ctx：同理
+ *   - 遍历所有 FN 键 ctx：同理，并在长按阈值到达时排队 LONG
  */
 __INTERRUPT __HIGH_CODE void TMR0_IRQHandler(void)
 {
@@ -659,12 +722,31 @@ __INTERRUPT __HIGH_CODE void TMR0_IRQHandler(void)
             gpio_port_t port = g_key_pins[i].port;
             uint32_t pin = g_key_pins[i].pin;
             ClearPinItFlag(port, pin);
-            EnablePinIrq(port, pin);
+            uint8_t level = ReadPinLevel(&g_key_pins[i]);
+            uint8_t missed_edge = (s_key_ctx[i].expect == 0) ?
+                                      (level == 0) : (level != 0);
+            if (missed_edge)
+            {
+                HandleNormalKeyEdge(i);
+            }
+            else
+            {
+                EnablePinIrq(port, pin);
+            }
         }
     }
 
     for (uint8_t id = 0; id < KBD_FN_NUM_KEYS; id++)
     {
+        if (s_fn_ctx[id].is_down && !s_fn_ctx[id].long_sent &&
+            !s_fn_ctx[id].suppress_action &&
+            (uint32_t)(s_tick_ms - s_fn_ctx[id].press_tick) >=
+                (uint32_t)s_fn_ctx[id].long_press_ms)
+        {
+            s_fn_ctx[id].long_sent = 1;
+            PushFnEvent(id, FNKEY_EVT_LONG, s_tick_ms);
+        }
+
         uint16_t lm = s_fn_ctx[id].lock_ms;
         if (lm == 0)
             continue;
@@ -675,7 +757,17 @@ __INTERRUPT __HIGH_CODE void TMR0_IRQHandler(void)
             gpio_port_t port = g_fn_pins[id].port;
             uint32_t pin = g_fn_pins[id].pin;
             ClearPinItFlag(port, pin);
-            EnablePinIrq(port, pin);
+            uint8_t level = ReadPinLevel(&g_fn_pins[id]);
+            uint8_t missed_edge = (s_fn_ctx[id].expect == 0) ?
+                                      (level == 0) : (level != 0);
+            if (missed_edge)
+            {
+                HandleFnKeyEdge(id);
+            }
+            else
+            {
+                EnablePinIrq(port, pin);
+            }
         }
     }
 
@@ -717,6 +809,82 @@ uint8_t FnKey_GetEvent(fnkey_event_t *evt)
     *evt = s_fn_queue[s_fn_rd];
     s_fn_rd = (uint8_t)((s_fn_rd + 1) & (FNKEY_QUEUE_SIZE - 1));
     return 1;
+}
+
+void Key_BeginDeepWakeRecovery(uint32_t gpioa_flags, uint32_t gpiob_flags)
+{
+    (void)gpioa_flags;
+    (void)gpiob_flags;
+    s_deep_wake_recovery_pending = 1;
+    s_deep_wake_ready_tick = 0;
+    s_deep_wake_sync_pending = 0;
+
+    for (uint8_t i = 0; i < KBD_SCAN_KEY_COUNT; i++)
+    {
+        if (s_key_ctx[i].is_down)
+        {
+            s_key_ctx[i].suppress_action = 1;
+        }
+    }
+    for (uint8_t id = 0; id < KBD_FN_NUM_KEYS; id++)
+    {
+        if (s_fn_ctx[id].is_down)
+        {
+            s_fn_ctx[id].suppress_action = 1;
+        }
+    }
+}
+
+void Key_ServiceDeepWakeKeys(uint8_t transport_ready)
+{
+    if (!s_deep_wake_recovery_pending)
+    {
+        return;
+    }
+
+    if (!transport_ready)
+    {
+        s_deep_wake_ready_tick = 0;
+        return;
+    }
+
+    if (s_deep_wake_ready_tick == 0u)
+    {
+        s_deep_wake_ready_tick = GetTickMs();
+        return;
+    }
+
+    if ((uint32_t)(GetTickMs() - s_deep_wake_ready_tick) >=
+        DEEP_WAKE_HID_SETTLE_MS)
+    {
+        s_deep_wake_recovery_pending = 0;
+        s_deep_wake_ready_tick = 0;
+        s_deep_wake_sync_pending = 1;
+    }
+}
+
+uint8_t Key_IsDeepWakeRecoveryPending(void)
+{
+    return s_deep_wake_recovery_pending;
+}
+
+uint8_t Key_IsDeepWakeSyncPending(void)
+{
+    return s_deep_wake_sync_pending;
+}
+
+void Key_FinishDeepWakeSync(void)
+{
+    s_deep_wake_sync_pending = 0;
+}
+
+void FnKey_SetLongPressThreshold(uint8_t id, uint16_t threshold_ms)
+{
+    if (id >= KBD_FN_NUM_KEYS)
+        return;
+
+    s_fn_ctx[id].long_press_ms =
+        (threshold_ms == 0u) ? (uint16_t)FN_LONG_PRESS_MS : threshold_ms;
 }
 
 /**
@@ -769,6 +937,9 @@ void Key_Init(void)
     s_key_rd = s_key_wr = 0;
     s_fn_rd = s_fn_wr = 0;
     s_tick_ms = 0;
+    s_deep_wake_recovery_pending = 0;
+    s_deep_wake_ready_tick = 0;
+    s_deep_wake_sync_pending = 0;
 
     /* BOOT: input only. */
     ConfigPinInputPullup(&g_boot_pin);
@@ -794,7 +965,7 @@ void Key_Init(void)
         EnablePinIrq(pin->port, pin->pin);
     }
 
-    /* FN keys: input + ALWAYS start from press(fall). */
+    /* FN keys: initialize the expected edge from the actual pin level. */
     for (uint8_t id = 0; id < KBD_FN_NUM_KEYS; id++)
     {
         const kbd_key_pin_t *pin = &g_fn_pins[id];
@@ -806,13 +977,16 @@ void Key_Init(void)
 
         s_fn_ctx[id].is_down = (level == 0) ? 1 : 0;
         s_fn_ctx[id].lock_ms = 0;
+        s_fn_ctx[id].long_sent = (level == 0) ? 1 : 0;
+        s_fn_ctx[id].suppress_action = (level == 0) ? 1 : 0;
+        s_fn_ctx[id].long_press_ms = FN_LONG_PRESS_MS;
 
-        /* 关键：强制下一次当成“按下沿” */
-        s_fn_ctx[id].expect = 0;
-        s_fn_ctx[id].press_tick = 0; /* 按下沿会重写 */
-
-        /* 关键：强制先等下降沿（按下） */
-        ConfigPinFallEdge(pin);
+        s_fn_ctx[id].expect = (level == 0) ? 1 : 0;
+        s_fn_ctx[id].press_tick = 0;
+        if (level == 0)
+            ConfigPinRiseEdge(pin);
+        else
+            ConfigPinFallEdge(pin);
 
         ClearPinItFlag(pin->port, pin->pin);
         EnablePinIrq(pin->port, pin->pin);
@@ -852,6 +1026,11 @@ void Key_EnterSleep(void)
 
     if (s_timer_active)
         StopTimer1ms();
+
+    /* BLE LIGHT uses LowPower_Sleep between radio events. Keep GPIO as a
+     * wake source so a key press wakes immediately instead of waiting for
+     * the next connection event. */
+    PWR_PeriphWakeUpCfg(ENABLE, RB_SLP_GPIO_WAKE, Long_Delay);
 }
 
 /**
@@ -859,6 +1038,7 @@ void Key_EnterSleep(void)
  */
 void Key_ExitSleep(void)
 {
+    PWR_PeriphWakeUpCfg(DISABLE, RB_SLP_GPIO_WAKE, Long_Delay);
     Encoder_ExitSleep();
     if (!s_timer_active)
         StartTimer1ms();

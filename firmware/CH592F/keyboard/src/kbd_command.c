@@ -22,6 +22,7 @@
 #include "kbd_rgb.h"
 #include "kbd_log.h"
 #include "kbd_storage.h"
+#include "key.h"
 #include "iap_config.h"
 #include "CH59x_common.h"
 #include <string.h>
@@ -485,7 +486,7 @@ static void HandleRgbGet(const kbd_cmd_frame_t *frame)
   kbd_rgb_config_t *rgb = KBD_GetRgbConfig();
   kbd_system_config_t *sys = KBD_GetSystemConfig();
 
-  uint8_t resp[13];
+  uint8_t resp[14];
   resp[0] = KBD_RESP_OK;
   resp[1] = rgb->enabled;
   resp[2] = rgb->mode;
@@ -499,8 +500,9 @@ static void HandleRgbGet(const kbd_cmd_frame_t *frame)
   resp[10] = rgb->press_effect;
   resp[11] = sys->auto_sleep_min;
   resp[12] = sys->deep_sleep_min;
+  resp[13] = (sys->seamless_wake != KBD_SEAMLESS_WAKE_DISABLED) ? 1u : 0u;
 
-  KBD_Command_SendResponse(KBD_CMD_RGB_GET, 0, resp, 13);
+  KBD_Command_SendResponse(KBD_CMD_RGB_GET, 0, resp, 14);
 }
 
 /**
@@ -510,12 +512,12 @@ static void HandleRgbSet(const kbd_cmd_frame_t *frame)
 {
   kbd_rgb_config_t *rgb = KBD_GetRgbConfig();
   kbd_system_config_t *sys = KBD_GetSystemConfig();
-  const uint8_t expected_len = 12;
+  const uint8_t min_len = 12;
 
-  if (frame->len != expected_len)
+  if (frame->len < min_len)
   {
     uint8_t resp[1] = {KBD_RESP_ERR_PARAM};
-    LOG_W(TAG, "RGB set data invalid: len=%d need=%d", frame->len, expected_len);
+    LOG_W(TAG, "RGB set data invalid: len=%d need>=%d", frame->len, min_len);
     KBD_Command_SendResponse(KBD_CMD_RGB_SET, 0, resp, 1);
     return;
   }
@@ -542,6 +544,12 @@ static void HandleRgbSet(const kbd_cmd_frame_t *frame)
 
   sys->auto_sleep_min = frame->data[10];
   sys->deep_sleep_min = frame->data[11];
+  if (frame->len >= 13u)
+  {
+    sys->seamless_wake = frame->data[12]
+                             ? KBD_SEAMLESS_WAKE_ENABLED
+                             : KBD_SEAMLESS_WAKE_DISABLED;
+  }
 
   KBD_RGB_SetMode((kbd_rgb_mode_t)rgb->mode);
   KBD_RGB_SetBrightness(rgb->brightness);
@@ -689,6 +697,11 @@ static void HandleFnkeySet(const kbd_cmd_frame_t *frame)
   }
 
   memcpy(fnkey, req, sizeof(kbd_fnkey_config_t));
+
+  /* 网页写入后立即同步阈值，不必重启才能生效。 */
+  for (uint8_t i = 0; i < KBD_FN_NUM_KEYS; i++) {
+    FnKey_SetLongPressThreshold(i, fnkey->fn[i].long_press_ms);
+  }
 
   uint8_t resp[1] = {KBD_RESP_OK};
   KBD_Command_SendResponse(KBD_CMD_FNKEY_SET, 0, resp, 1);

@@ -87,6 +87,7 @@ int BLE_HID_Disconnect(void);
  * @return true 已连接，false 未连接
  */
 bool BLE_HID_IsConnected(void);
+bool BLE_HID_IsKeyboardReady(void);
 
 /**
  * @brief 获取 GAP 角色状态

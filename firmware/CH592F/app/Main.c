@@ -52,6 +52,13 @@ int main(void)
     /* 设置系统时钟 */
     SetSysClock(CLK_SOURCE_PLL_60MHz);
 
+    /* Shutdown uses a software reset after GPIO wake. Capture the retained
+     * marker and latched GPIO source before peripheral initialization clears it. */
+    uint8_t deep_wake_marker = R8_GLOB_RESET_KEEP;
+    uint32_t deep_wake_gpioa_flags = GPIOA_ReadITFlagPort();
+    uint32_t deep_wake_gpiob_flags = GPIOB_ReadITFlagPort();
+    SYS_ResetKeepBuf(0u);
+
 #if (defined(DCDC_ENABLE)) && (DCDC_ENABLE == TRUE)
     /* 启用内部 DCDC，节省核心功耗（约 30%） */
     PWR_DCDCCfg(ENABLE);
@@ -78,6 +85,22 @@ int main(void)
 
     /* 存储系统初始化（需在模式判定前完成，以读取 last_mode） */
     KBD_Storage_Init();
+
+    /* 将每个 FN 的持久化长按阈值同步到按键驱动。 */
+    {
+        kbd_fnkey_config_t *fn_cfg = KBD_GetFnKeyConfig();
+        for (uint8_t i = 0; i < KBD_FN_NUM_KEYS; i++) {
+            FnKey_SetLongPressThreshold(i, fn_cfg->fn[i].long_press_ms);
+        }
+    }
+
+    /* DEEP wake is a cold BLE reconnect. Consume all wake/reconnect input and
+     * synchronize an empty HID state before accepting fresh key presses. */
+    if (deep_wake_marker == KBD_DEEP_WAKE_RESET_MARKER)
+    {
+        Key_BeginDeepWakeRecovery(deep_wake_gpioa_flags,
+                                  deep_wake_gpiob_flags);
+    }
 
     /* 读取上次模式，决定本次启动路径 */
     uint8_t last_mode = KBD_GetLastMode();

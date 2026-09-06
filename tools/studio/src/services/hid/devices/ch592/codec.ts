@@ -66,9 +66,11 @@ export class Ch592Codec implements DeviceCodec<DataView> {
   readonly capabilities = CH592_CAPABILITIES;
   readonly chipFamily = FIRMWARE_VERSION_META.CH592F.chipFamily;
   private meowfsCache: MeowFsCache | null = null;
+  private supportsSeamlessWake = false;
 
   resetState(): void {
     this.meowfsCache = null;
+    this.supportsSeamlessWake = false;
   }
 
   getOptionalOperations(transport: CodecTransport<DataView>): HidOptionalOperations {
@@ -236,6 +238,7 @@ export class Ch592Codec implements DeviceCodec<DataView> {
 
   parseRgbConfig(resp: DataView): RgbConfig {
     const d = this.expectOk(resp, 'RGB_GET');
+    this.supportsSeamlessWake = resp.getUint8(2) >= 14;
     return {
       enabled: resp.getUint8(d + 1) !== 0,
       mode: resp.getUint8(d + 2),
@@ -249,11 +252,14 @@ export class Ch592Codec implements DeviceCodec<DataView> {
       pressEffect: resp.getUint8(d + 10),
       lightSleepMin: resp.getUint8(d + 11),
       deepSleepMin: resp.getUint8(d + 12),
+      seamlessWakeEnabled: this.supportsSeamlessWake
+        ? resp.getUint8(d + 13) !== 0
+        : true,
     };
   }
 
   buildSetRgbPayload(config: RgbConfig): Uint8Array {
-    const data = new Uint8Array(12);
+    const data = new Uint8Array(this.supportsSeamlessWake ? 13 : 12);
     data[0] = config.enabled ? 1 : 0;
     data[1] = config.mode;
     data[2] = config.brightness;
@@ -266,6 +272,9 @@ export class Ch592Codec implements DeviceCodec<DataView> {
     data[9] = config.pressEffect;
     data[10] = config.lightSleepMin!;
     data[11] = config.deepSleepMin!;
+    if (this.supportsSeamlessWake) {
+      data[12] = config.seamlessWakeEnabled === false ? 0 : 1;
+    }
     return data;
   }
 

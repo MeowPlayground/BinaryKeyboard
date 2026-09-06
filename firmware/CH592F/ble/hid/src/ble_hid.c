@@ -320,6 +320,11 @@ bool BLE_HID_IsConnected (void) {
     return (state == GAPROLE_CONNECTED || state == GAPROLE_CONNECTED_ADV);
 }
 
+bool BLE_HID_IsKeyboardReady (void) {
+    return HidDev_IsReportReady (HID_RPT_ID_KEY_IN,
+                                 HID_REPORT_TYPE_INPUT) ? true : false;
+}
+
 gapRole_States_t BLE_HID_GetState (void) {
     return g_ble_state;
 }

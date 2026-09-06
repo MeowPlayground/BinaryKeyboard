@@ -124,6 +124,23 @@ extern "C"
 /** 启用低功耗模式 */
 #define KBD_LOW_POWER_ENABLE 1
 
+/**
+ * 休眠可视化测试模式。
+ * 仅测试固件开启：空闲每 10 秒让指示灯短闪一次，进入 LIGHT 时仍执行
+ * 正式的休眠提示动画。发布构建保持关闭，避免增加灯光和功耗。
+ */
+#ifndef KBD_SLEEP_TEST_MODE
+#define KBD_SLEEP_TEST_MODE 0
+#endif
+
+#ifndef KBD_SLEEP_TEST_FLASH_INTERVAL_MS
+#define KBD_SLEEP_TEST_FLASH_INTERVAL_MS 10000u
+#endif
+
+#ifndef KBD_SLEEP_TEST_FLASH_DURATION_MS
+#define KBD_SLEEP_TEST_FLASH_DURATION_MS 100u
+#endif
+
 /** 兼容旧宏：当前实际超时以 DataFlash / Studio 配置为准 */
 #ifndef KBD_LIGHT_SLEEP_TIMEOUT_MS
 #define KBD_LIGHT_SLEEP_TIMEOUT_MS 60000u /**< LIGHT 默认 1 分钟 */
@@ -178,6 +195,9 @@ extern "C"
 #define BLE_BONDING_MODE KBD_BLE_BONDING_MODE
 #define BLE_IO_CAPABILITIES KBD_BLE_IO_CAPABILITIES
 #define BLE_HID_IDLE_TIMEOUT KBD_BLE_HID_IDLE_TIMEOUT
+
+/* R8_GLOB_RESET_KEEP marker: the next boot follows an intentional DEEP wake. */
+#define KBD_DEEP_WAKE_RESET_MARKER 0xD7u
 
 #ifdef __cplusplus
 }

@@ -336,7 +336,7 @@ function onCatAction(action: string) {
       v-if="showRgbPanel"
       v-model:visible="rgbPanelVisible"
       size="sm"
-      header="RGB 灯效"
+      header="灯光与电源"
       class="rgb-dialog"
     >
       <RgbPanel />

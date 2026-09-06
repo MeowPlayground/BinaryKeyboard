@@ -309,6 +309,7 @@ export function parseSendFrame(frame: Uint8Array): {
         const press =
           PRESS_EFFECT_NAMES[data[9] ?? PressEffect.NONE] || `未知(${data[9]})`;
         parsed += ` | ${enabled}, 模式=${mode}, 亮度=${brightness}%, 颜色=#${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}, 按键附魔=${press}`;
+        if (len >= 13) parsed += `, 无感唤醒=${data[12] ? "开" : "关"}`;
       }
       break;
 
@@ -507,6 +508,7 @@ export function parseReceiveFrame(frame: Uint8Array): {
           PRESS_EFFECT_NAMES[data[10] ?? PressEffect.NONE] ||
           `未知(${data[10]})`;
         parsed += ` | ${enabled}, ${mode}, 亮度=${brightness}%, #${r.toString(16).padStart(2, "0")}${g.toString(16).padStart(2, "0")}${b.toString(16).padStart(2, "0")}, ${indicator}, 按键附魔=${press}`;
+        if (len >= 14) parsed += `, 无感唤醒=${data[13] ? "开" : "关"}`;
       }
       break;
 

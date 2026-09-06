@@ -427,6 +427,7 @@ export interface RgbConfig {
   pressEffect: PressEffect;
   lightSleepMin?: number; /**< LIGHT 休眠时间（分钟，0=禁用） */
   deepSleepMin?: number; /**< DEEP 延时（在 LIGHT 后，分钟，0=禁用） */
+  seamlessWakeEnabled?: boolean; /**< 唤醒首键透传 */
   pollRate?: number; /**< USB HID 轮询率 bInterval (1=1000Hz, 2=500Hz, 5=200Hz, 10=100Hz) */
 }
 
@@ -646,6 +647,7 @@ export function createDefaultRgbConfig(): RgbConfig {
     pressEffect: PressEffect.NONE,
     lightSleepMin: 1,
     deepSleepMin: 1,
+    seamlessWakeEnabled: true,
     pollRate: 10,
   };
 }

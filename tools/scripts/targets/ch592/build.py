@@ -37,6 +37,7 @@ from versioning import (
     ch592_base_stem_for_keyboard,
     ch592_filename_for_keyboard,
     ch592_iap_filename_for_keyboard,
+    emit_c_header,
     normalize_keyboard_name,
 )
 
@@ -174,13 +175,17 @@ def _normalize_keyboard(value: str) -> str:
 
 def _normalize_profile(value: str) -> str:
     profile = value.strip().lower()
-    if profile not in {"release", "debug"}:
-        die(f"Unsupported profile: {value}. Expected release or debug.")
+    if profile not in {"release", "debug", "sleep-test"}:
+        die(f"Unsupported profile: {value}. Expected release, debug, or sleep-test.")
     return profile
 
 
 def preset_for(keyboard: str, profile: str) -> str:
-    return f"{_normalize_profile(profile)}-{_normalize_keyboard(keyboard).lower()}"
+    normalized_profile = _normalize_profile(profile)
+    keyboard_name = _normalize_keyboard(keyboard).lower()
+    if normalized_profile == "sleep-test":
+        return f"debug-{keyboard_name}-sleep-test"
+    return f"{normalized_profile}-{keyboard_name}"
 
 
 def build_dir_for(keyboard: str, profile: str) -> Path:
@@ -308,8 +313,12 @@ def _ninja_build_files_ready(build_dir: Path) -> bool:
 
 
 def cmake_configure_args(cmake: Path, keyboard: str, profile: str, build_dir: Path) -> list[str]:
-    build_type = {"release": "MinSizeRel", "debug": "Debug"}[profile]
-    return [
+    build_type = {
+        "release": "MinSizeRel",
+        "debug": "Debug",
+        "sleep-test": "Debug",
+    }[profile]
+    args = [
         str(cmake),
         "-S", str(FIRMWARE_DIR),
         "-B", str(build_dir),
@@ -320,6 +329,9 @@ def cmake_configure_args(cmake: Path, keyboard: str, profile: str, build_dir: Pa
         f"-DCMAKE_BUILD_TYPE={build_type}",
         "-DCMAKE_EXPORT_COMPILE_COMMANDS=ON",
     ]
+    if profile == "sleep-test":
+        args.append("-DKBD_SLEEP_TEST_MODE=ON")
+    return args
 
 
 def run(cmd: list[str], cwd: Optional[Path] = None) -> None:
@@ -830,6 +842,14 @@ def build_full(keyboard: str, profile: str, build_number: int | None = None) -> 
     bootloader_build()
 
     # 2. Build app
+    # The generated header is timestamp-based in CMake, so changing only the
+    # environment would otherwise leave a cached dev/older version embedded.
+    app_build_dir = build_dir_for(keyboard, profile)
+    emit_c_header(
+        "CH592F",
+        app_build_dir / "generated" / "bk_version_config.h",
+        build_number,
+    )
     app_build_dir = build(keyboard, profile)
 
     # 3. Merge hex
@@ -912,7 +932,8 @@ def build_parser() -> argparse.ArgumentParser:
     # Full build (JumpIAP + app + IAP merged)
     p_full = sub.add_parser("build-full", help="Build JumpIAP + app + IAP and merge into full HEX for ISP")
     p_full.add_argument("-k", "--keyboard", default=DEFAULT_KEYBOARD, help="5KEY / KNOB")
-    p_full.add_argument("--profile", default=DEFAULT_PROFILE, help="release / debug")
+    p_full.add_argument("--profile", default=DEFAULT_PROFILE,
+                        help="release / debug / sleep-test")
     p_full.add_argument("--build-number", type=int, default=None, metavar="PATCH",
                         help="Pin the firmware patch version (CI use; skips GitHub API lookup)")
 

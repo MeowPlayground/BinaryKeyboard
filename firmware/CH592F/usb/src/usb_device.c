@@ -354,6 +354,24 @@ void USB_Device_Deinit(void)
     g_USB_DeviceState = USB_STATE_DETACHED;
 }
 
+static bool USB_Device_ShouldWakeKeyboard(void)
+{
+    if (!KBD_Mode_IsInSleep())
+    {
+        return false;
+    }
+
+    /* BLE mode keeps USB initialized for Studio configuration. Without a
+     * cable, phantom RESET/TRANSFER flags must not wake LIGHT. Only a host
+     * that completed enumeration is allowed to wake the keyboard. */
+    if (KBD_Mode_Get() == KBD_WORK_MODE_BLE)
+    {
+        return (g_USB_DeviceState == USB_STATE_CONFIGURED);
+    }
+
+    return true;
+}
+
 /**
  * @brief USB 传输处理
  */
@@ -364,7 +382,7 @@ void USB_Device_TransferProcess(void)
 
     if (intflag & RB_UIF_TRANSFER)
     {
-        if (KBD_Mode_IsInSleep())
+        if (USB_Device_ShouldWakeKeyboard())
         {
             KBD_Mode_RequestWake();
         }
@@ -451,7 +469,7 @@ void USB_Device_TransferProcess(void)
 
         if (R8_USB_INT_ST & RB_UIS_SETUP_ACT)
         {
-            if (KBD_Mode_IsInSleep())
+            if (USB_Device_ShouldWakeKeyboard())
             {
                 KBD_Mode_RequestWake();
             }
@@ -469,7 +487,7 @@ void USB_Device_TransferProcess(void)
         R8_UEP4_CTRL = UEP_R_RES_ACK | UEP_T_RES_NAK;
         R8_USB_INT_FG = RB_UIF_BUS_RST;
         g_USB_DeviceState = USB_STATE_DEFAULT;
-        if (KBD_Mode_IsInSleep())
+        if (USB_Device_ShouldWakeKeyboard())
         {
             KBD_Mode_RequestWake();
         }

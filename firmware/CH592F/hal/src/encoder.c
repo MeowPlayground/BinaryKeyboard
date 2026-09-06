@@ -174,9 +174,9 @@ uint8_t Encoder_GetEvent(key_event_t *evt) {
   return 1;
 }
 
-void Encoder_HandlePortIrq(gpio_port_t port) {
+uint8_t Encoder_HandlePortIrq(gpio_port_t port) {
   if (port != g_encoder_a_pin.port && port != g_encoder_b_pin.port) {
-    return;
+    return 0;
   }
 
   uint16_t enabled = (port == GPIO_PORT_A) ? R16_PA_INT_EN : R16_PB_INT_EN;
@@ -190,7 +190,7 @@ void Encoder_HandlePortIrq(gpio_port_t port) {
 
   uint32_t flags = ReadPortItFlags(port) & enabled & interested;
   if (flags == 0) {
-    return;
+    return 0;
   }
 
   if (flags & g_encoder_a_pin.pin) {
@@ -202,6 +202,7 @@ void Encoder_HandlePortIrq(gpio_port_t port) {
 
   ProcessEncoderTransition(s_encoder_ctx.tick_ms);
   ConfigEncoderEdgesFromCurrentLevel();
+  return 1;
 }
 
 void Encoder_TimerTick1ms(void) {
@@ -227,7 +228,10 @@ uint8_t Encoder_GetEvent(key_event_t *evt) {
   (void)evt;
   return 0;
 }
-void Encoder_HandlePortIrq(gpio_port_t port) { (void)port; }
+uint8_t Encoder_HandlePortIrq(gpio_port_t port) {
+  (void)port;
+  return 0;
+}
 void Encoder_TimerTick1ms(void) {}
 void Encoder_EnterSleep(void) {}
 void Encoder_ExitSleep(void) {}

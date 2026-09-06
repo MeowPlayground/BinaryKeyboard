@@ -80,7 +80,7 @@ export const LAYOUT_FIVE_KEYS: LayoutDef = {
  * 说明: + 代表旋钮（被分成3份：左转、按下、右转）
  * 旋钮的3个操作都在同一个位置（row 0, col 0），由 EncoderButton 组件合并显示
  * 实体键顺序按实际物理位置：0=P34, 1=P14, 2=P33, 3=P31
- * 虚拟按键: 0-3=物理键, 4=按下, 5=逆时针, 6=顺时针
+ * 虚拟按键与 CH592F 固件协议一致: 0-3=物理键, 4=顺时针, 5=逆时针, 6=按下
  */
 export const LAYOUT_KNOB: LayoutDef = {
   name: '旋钮款',
@@ -88,8 +88,8 @@ export const LAYOUT_KNOB: LayoutDef = {
   rows: 2,
   hasEncoder: true,
   keys: [
-    { index: 4, row: 0, col: 0, size: '1u', label: '●', type: 'encoder-press' }, // 旋钮按下（+）
-    { index: 6, row: 0, col: 0, size: '1u', label: '↻', type: 'encoder-cw' }, // 旋钮右转（与按下同一位置）
+    { index: 6, row: 0, col: 0, size: '1u', label: '●', type: 'encoder-press' }, // 旋钮按下（+）
+    { index: 4, row: 0, col: 0, size: '1u', label: '↻', type: 'encoder-cw' }, // 旋钮右转（与按下同一位置）
     { index: 5, row: 0, col: 0, size: '1u', label: '↺', type: 'encoder-ccw' }, // 旋钮左转（与按下同一位置）
     { index: 0, row: 0, col: 1, size: '1u' }, // 按键0（·）
     { index: 1, row: 0, col: 2, size: '2u-v' }, // 按键1（|，竖向2u）

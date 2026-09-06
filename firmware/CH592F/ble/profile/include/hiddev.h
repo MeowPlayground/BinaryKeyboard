@@ -345,6 +345,9 @@ extern void HidDev_RegisterReports(uint8_t numReports, hidRptMap_t *pRpt);
  */
 extern uint8_t HidDev_Report(uint8_t id, uint8_t type, uint8_t len, uint8_t *pData);
 
+/** Return TRUE only when the secure link and report notification are ready. */
+extern uint8_t HidDev_IsReportReady(uint8_t id, uint8_t type);
+
 /*********************************************************************
  * @fn      HidDev_Close
  *

@@ -318,6 +318,34 @@ uint8_t HidDev_Report(uint8_t id, uint8_t type, uint8_t len, uint8_t *pData)
     return bleNotReady;
 }
 
+uint8_t HidDev_IsReportReady(uint8_t id, uint8_t type)
+{
+    hidRptMap_t *pRpt;
+    gattAttribute_t *pAttr;
+    uint16_t retHandle;
+
+    if(!hidDevIsConnectedState(hidDevGapState) || !hidDevConnSecure)
+    {
+        return FALSE;
+    }
+
+    pRpt = hidDevRptById(id, type);
+    if(pRpt == NULL)
+    {
+        return FALSE;
+    }
+
+    pAttr = GATT_FindHandle(pRpt->cccdHandle, &retHandle);
+    if(pAttr == NULL)
+    {
+        return FALSE;
+    }
+
+    return (GATTServApp_ReadCharCfg(gapConnHandle,
+                                    (gattCharCfg_t *)pAttr->pValue) &
+            GATT_CLIENT_CFG_NOTIFY) ? TRUE : FALSE;
+}
+
 /*********************************************************************
  * @fn      HidDev_Close
  *

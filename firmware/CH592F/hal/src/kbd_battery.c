@@ -504,7 +504,6 @@ void KBD_Battery_Init(void)
           -BAT_ADC_CALIB_LIMIT);
     s_adc_calib = -BAT_ADC_CALIB_LIMIT;
   }
-
   s_task_id = TMOS_ProcessEventRegister(KBD_Battery_ProcessEvent);
   if (s_task_id == TASK_NO_TASK)
   {

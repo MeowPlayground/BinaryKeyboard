@@ -71,6 +71,8 @@
         </select>
       </div>
 
+      <div v-if="showSleepConfig" class="rgb-section-label">电源设置</div>
+
       <div v-if="showSleepConfig" class="rgb-item">
         <span class="rgb-label">LIGHT 休眠（分钟，0=禁用）</span>
         <input
@@ -95,6 +97,14 @@
           @change="autoSaveRgb"
           @blur="autoSaveRgb"
         />
+      </div>
+
+      <div v-if="showSleepConfig" class="rgb-item">
+        <span class="rgb-label">LIGHT 无感唤醒</span>
+        <label class="rgb-switch">
+          <input type="checkbox" v-model="seamlessWakeModel" @change="autoSaveRgb" />
+          <span>{{ seamlessWakeModel ? 'LIGHT 首键正常执行' : 'LIGHT 首键仅唤醒' }}</span>
+        </label>
       </div>
 
       <div v-if="deviceStore.deviceInfo?.protocol === DeviceProtocol.CH552" class="rgb-item">
@@ -196,6 +206,11 @@ const pollRateModel = computed({
   set: (v: number) => { deviceStore.rgbConfig.pollRate = v; },
 });
 
+const seamlessWakeModel = computed({
+  get: () => deviceStore.rgbConfig.seamlessWakeEnabled !== false,
+  set: (v: boolean) => { deviceStore.rgbConfig.seamlessWakeEnabled = v; },
+});
+
 const colorHex = computed({
   get: () =>
     rgbToHex(
@@ -261,6 +276,15 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   gap: 4px;
+}
+
+.rgb-section-label {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid var(--c-border);
+  color: var(--c-text-primary);
+  font-size: 0.9rem;
+  font-weight: 600;
 }
 
 .rgb-label {

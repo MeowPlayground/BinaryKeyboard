@@ -27,6 +27,7 @@ set_property(CACHE KEYBOARD PROPERTY STRINGS 5KEY KNOB)
 set(KBD_NAME_PREFIX "BinaryKeyboard" CACHE STRING "Keyboard name prefix")
 set(KBD_MODEL "AUTO" CACHE STRING "Keyboard model suffix for device name (AUTO uses KEYBOARD)")
 set(KBD_DEVICE_NAME_OVERRIDE "" CACHE STRING "Override full USB/BLE device name, empty means auto compose")
+option(KBD_SLEEP_TEST_MODE "Enable visible idle/sleep timing indicators" OFF)
 string(TOUPPER "${KEYBOARD}" KEYBOARD_UPPER)
 string(TOUPPER "${KBD_MODEL}" KBD_MODEL_UPPER_RAW)
 
@@ -195,7 +196,7 @@ set(CH592_COMPILE_DEFINITIONS
     ${KBD_LAYOUT_DEFINE}
     KBD_MODEL_NAME=\"${KBD_MODEL_UPPER}\"
     KBD_DEVICE_NAME=\"${KBD_DEVICE_NAME}\"
-    HAL_SLEEP=FALSE
+    HAL_SLEEP=TRUE
     DCDC_ENABLE=TRUE
 )
 
@@ -212,6 +213,12 @@ else()
         KBD_DEBUG_BUILD=0
         KBD_USB_LOG_ENABLE=0
         KBD_LOG_DEFAULT_ENABLED=0
+    )
+endif()
+
+if(KBD_SLEEP_TEST_MODE)
+    list(APPEND CH592_COMPILE_DEFINITIONS
+        KBD_SLEEP_TEST_MODE=1
     )
 endif()
 

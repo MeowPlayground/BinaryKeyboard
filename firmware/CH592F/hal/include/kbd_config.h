@@ -105,8 +105,8 @@ typedef struct
 #define KBD_VBAT_ADC_PIN GPIO_Pin_14
 #define KBD_VBAT_EN_PIN GPIO_Pin_15
 
-/* Diagnostic build: keep the divider enabled so VBAT_AD can be measured. */
-#define KBD_VBAT_DIVIDER_ALWAYS_ON 1
+/* Battery divider is powered only during a requested sample window. */
+#define KBD_VBAT_DIVIDER_ALWAYS_ON 0
 
 /* CH592 VINTA ADC reference and the board's 100K/100K VBAT divider. */
 #define KBD_ADC_VREF_MV 1050u
@@ -234,8 +234,9 @@ typedef struct
 #define KBD_LOGICAL_TO_PHYSICAL_MAP {2, 3, 4, 1, 0}
 #define KBD_LAYER_TO_KEY_MAP {0, 1, 2, 3, 4}
 #elif defined(KBD_LAYOUT_KNOB)
-#define KBD_LOGICAL_TO_PHYSICAL_MAP {3, 2, 0, 1}
-#define KBD_LAYER_TO_KEY_MAP {1, 0, 3, 2}
+/* PCB chain order: swap the K1/K2 and K3/K4 logical pairs. */
+#define KBD_LOGICAL_TO_PHYSICAL_MAP {2, 3, 1, 0}
+#define KBD_LAYER_TO_KEY_MAP {0, 1, 2, 3}
 #endif
 
 /**

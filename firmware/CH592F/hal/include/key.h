@@ -4,7 +4,7 @@
  * @details
  * 本模块将按键输入抽象为“事件队列”：
  * - 普通按键（K1..Kn）：产生 PRESS / RELEASE 事件（是否上报 RELEASE 可配置）
- * - FN 按键（FN1..FNn）：按下只记录起始时间，松开时根据持续时间产生 CLICK / LONG 事件
+ * - FN 按键（FN1..FNn）：短按在松开时产生 CLICK，长按达到阈值时立即产生 LONG 事件
  * - BOOT 键：仅提供原始电平读取（不使用中断）
  *
  * 典型使用：
@@ -25,7 +25,7 @@
  *
  * @note
  * - GPIO 输入为上拉模式：按下=0，松开=1（Active-Low）
- * - 事件队列满时，新事件会被丢弃（Drop）
+ * - 事件队列满时优先保留 RELEASE，避免主机卡在按下状态
  */
 
 #ifndef KBD_KEY_H_
@@ -72,7 +72,7 @@ extern "C" {
 
 /**
  * @def FN_LONG_PRESS_MS
- * @brief FN 长按阈值（毫秒），松开时用持续时间判定 CLICK 或 LONG。
+ * @brief FN 长按阈值（毫秒），达到阈值后立即产生 LONG 事件。
  */
 #ifndef FN_LONG_PRESS_MS
 #define FN_LONG_PRESS_MS 800
@@ -157,11 +157,11 @@ typedef enum {
 
 /**
  * @enum fnkey_evt_type_t
- * @brief FN 键事件类型（松开时产生）。
+ * @brief FN 键事件类型。
  */
 typedef enum {
-  FNKEY_EVT_CLICK = 1, /**< 短按（dur < FN_LONG_PRESS_MS） */
-  FNKEY_EVT_LONG  = 2, /**< 长按（dur >= FN_LONG_PRESS_MS） */
+  FNKEY_EVT_CLICK = 1, /**< 短按（未达到该 FN 的阈值） */
+  FNKEY_EVT_LONG  = 2, /**< 长按（达到该 FN 的阈值） */
 } fnkey_evt_type_t;
 
 /**
@@ -197,9 +197,27 @@ void Key_Init(void);
  * @return 1 表示成功读到一个事件；0 表示队列为空或参数无效。
  * @note
  * - 队列为环形队列：ISR 侧 Push，主循环侧 Pop
- * - 队列满时 ISR 会丢弃新事件（不覆盖旧事件）
+ * - 队列满时 PRESS 会被丢弃；RELEASE 会丢弃最旧事件后入队
  */
 uint8_t Key_GetEvent(key_event_t *evt);
+
+/**
+ * @brief 开始 DEEP 唤醒恢复阶段。
+ * @details 唤醒键和重连期间的输入只用于恢复连接，不会作为 HID 操作执行。
+ */
+void Key_BeginDeepWakeRecovery(uint32_t gpioa_flags, uint32_t gpiob_flags);
+
+/** @brief HID 恢复时结束深睡事件缓冲阶段。 */
+void Key_ServiceDeepWakeKeys(uint8_t transport_ready);
+
+/** @brief 深睡唤醒事件是否仍在等待 HID 连接恢复。 */
+uint8_t Key_IsDeepWakeRecoveryPending(void);
+
+/** @brief HID 就绪后是否需要丢弃恢复期事件并同步全零键盘报告。 */
+uint8_t Key_IsDeepWakeSyncPending(void);
+
+/** @brief 全零键盘报告成功同步后结束 DEEP 恢复阶段。 */
+void Key_FinishDeepWakeSync(void);
 
 /**
  * @brief 查询普通按键当前是否处于按下状态。
@@ -216,9 +234,16 @@ int8_t  Key_IsDown(uint8_t key_index);
  * @param[out] evt 事件输出指针（不可为 NULL）。
  * @return 1 表示成功读到一个事件；0 表示队列为空或参数无效。
  * @details
- * FN 键事件在“松开边沿”产生：根据按下持续时间判定 CLICK / LONG。
+ * LONG 在按住达到阈值时产生；若未达到阈值，则在松开边沿产生 CLICK。
  */
 uint8_t FnKey_GetEvent(fnkey_event_t *evt);
+
+/**
+ * @brief 设置单个 FN 键的长按阈值。
+ * @param id FN 键索引
+ * @param threshold_ms 阈值（毫秒），0 表示使用编译期默认值
+ */
+void FnKey_SetLongPressThreshold(uint8_t id, uint16_t threshold_ms);
 
 /**
  * @brief 查询 FN 按键当前是否处于按下状态。

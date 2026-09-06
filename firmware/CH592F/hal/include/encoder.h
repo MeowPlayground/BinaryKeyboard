@@ -9,7 +9,7 @@ extern "C" {
 
 void Encoder_Init(void);
 uint8_t Encoder_GetEvent(key_event_t *evt);
-void Encoder_HandlePortIrq(gpio_port_t port);
+uint8_t Encoder_HandlePortIrq(gpio_port_t port);
 void Encoder_TimerTick1ms(void);
 void Encoder_EnterSleep(void);
 void Encoder_ExitSleep(void);

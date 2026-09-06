@@ -50,6 +50,9 @@ extern "C"
 #define KBD_MACRO_MAX_ACTIONS 255  /**< 单个宏最大动作数 */
 #define KBD_MACRO_VALID_MAGIC 0xAA /**< 宏有效标记 */
 
+#define KBD_SEAMLESS_WAKE_ENABLED  0xA5u
+#define KBD_SEAMLESS_WAKE_DISABLED 0x5Au
+
 /**
  * @brief 设备信息常量
  */
@@ -407,7 +410,8 @@ extern "C"
     uint8_t log_enabled;     /**< HID 日志开关 (0=关, 非0=开, 默认1) */
     uint8_t deep_sleep_min;  /**< DEEP 延时 (在 LIGHT 后, 分钟, 0=禁用) */
     uint8_t os_mode;         /**< 系统模式 (0=Win, 1=Mac) */
-    uint8_t reserved[58];    /**< 保留字段 */
+    uint8_t seamless_wake;   /**< 唤醒首键透传，使用 KBD_SEAMLESS_WAKE_* 标记 */
+    uint8_t reserved[57];    /**< 保留字段 */
   } kbd_system_config_t;
 
   typedef enum

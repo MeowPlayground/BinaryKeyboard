@@ -56,6 +56,15 @@
       "inherits": ["debug", "keyboard-5key"]
     },
     {
+      "name": "debug-5key-sleep-test",
+      "displayName": "Debug (5KEY, sleep test)",
+      "description": "Debug 5KEY build with visible 10-second idle indicators",
+      "inherits": ["debug-5key"],
+      "cacheVariables": {
+        "KBD_SLEEP_TEST_MODE": "ON"
+      }
+    },
+    {
       "name": "release-5key",
       "displayName": "Release (size, 5KEY)",
       "description": "Size-optimized build with 5KEY model naming",
@@ -68,6 +77,15 @@
       "inherits": ["debug", "keyboard-knob"]
     },
     {
+      "name": "debug-knob-sleep-test",
+      "displayName": "Debug (KNOB, sleep test)",
+      "description": "Debug KNOB build with visible 10-second idle indicators",
+      "inherits": ["debug-knob"],
+      "cacheVariables": {
+        "KBD_SLEEP_TEST_MODE": "ON"
+      }
+    },
+    {
       "name": "release-knob",
       "displayName": "Release (size, KNOB)",
       "description": "Size-optimized build with KNOB keyboard naming",
@@ -78,8 +96,10 @@
     { "name": "debug",   "configurePreset": "debug" },
     { "name": "release", "configurePreset": "release" },
     { "name": "debug-5key", "configurePreset": "debug-5key" },
+    { "name": "debug-5key-sleep-test", "configurePreset": "debug-5key-sleep-test" },
     { "name": "release-5key", "configurePreset": "release-5key" },
     { "name": "debug-knob", "configurePreset": "debug-knob" },
+    { "name": "debug-knob-sleep-test", "configurePreset": "debug-knob-sleep-test" },
     { "name": "release-knob", "configurePreset": "release-knob" }
   ]
 }
